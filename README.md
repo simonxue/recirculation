@@ -5,6 +5,7 @@
 **A training-free, inference-only architecture enhancement for Transformers** — recirculating a small fraction of deep-layer activations back into a shallow layer gives the feed-forward Transformer recurrent, cross-timestep state tracking, reducing perplexity and improving downstream performance.
 
 > ⚠️ **非官方实现 / Unofficial implementation.** This is an independent re-implementation of the paper *Recirculation* (arXiv:2608.17981) by Michael C. Mozer et al. (Google DeepMind / UT Austin). The authors have not released official code; this repository is written from the paper's description and validated by local experiments. 论文作者未发布官方代码，本仓库系按论文描述独立实现，并经本地实验验证。
+> 全部由DeepSeek-V4-Flash + DeepSeek Harness + dsh-TUI + 人工Prompt生成。
 
 ---
 
