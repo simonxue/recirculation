@@ -153,7 +153,7 @@ python3 eval_ppl.py --datasets builtin --n_windows 10 --window 512
 | `eval_strict.py` | 严肃验证（多文档 × 多位置窗口 + 逐位置诊断） |
 | `run_gpu.sh` / `check_gpu.py` | GPU 一键脚本 / 环境自检 |
 | `smoke_test.py` | 无 GPU 冒烟自检（CI 用） |
-| `results_*.json` | 各实验原始结果 |
+| `results_real.json` / `results_strict_step1.json` | 核心实验原始结果（实验 A / 实验 B，含环境指纹） |
 | `reading.md` | 论文精读笔记 + 完整复现报告（环境/实现/数据/对照/结论） |
 | `repro_plan.md` | 复现方案与最终摘要 |
 
