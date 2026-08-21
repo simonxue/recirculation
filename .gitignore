@@ -1,0 +1,9 @@
+# 模型与数据缓存（大文件，不入库）
+.hf_cache/
+.mpl/
+.tmp_paper/
+.dsh-plugin-search/
+
+# Python
+__pycache__/
+*.pyc

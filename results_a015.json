@@ -1,0 +1,21 @@
+{
+  "model": "google/gemma-3-1b-pt",
+  "params": {
+    "source": 11,
+    "dest": 4,
+    "alpha": 0.15,
+    "beta": null,
+    "ramp": 10,
+    "normalize": true
+  },
+  "windows": 5,
+  "window_len": 1024,
+  "datasets": {
+    "builtin": {
+      "baseline_ppl": 1.8608934754179265,
+      "recirc_ppl": 1.9186479507437917,
+      "pct_change": 3.103588469130103,
+      "tokens_eval": 5115
+    }
+  }
+}
