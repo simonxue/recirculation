@@ -130,6 +130,50 @@ def load_model(model_name: str = "google/gemma-3-1b-pt", device=None, dtype=None
                        device=device, dtype=dtype, n_layers=n_layers, hidden=hidden)
 
 
+def get_env_fingerprint() -> dict:
+    """
+    采集"环境指纹"：Python / PyTorch / transformers 版本与 GPU 信息。
+
+    作用：写进实验结果 JSON。开源复现项目里，别人拿到结果文件时能
+    一眼看出"这是在什么环境下跑出来的"，方便对照复现；自己也免得
+    几个月后忘了当初用哪个版本。
+
+    返回一个字典，可直接 json.dump 序列化：
+      python        : Python 版本号（如 "3.12.4"）
+      torch         : PyTorch 版本（如 "2.11.0+cu130"）
+      torch_cuda    : PyTorch 编译时的 CUDA 版本（如 "13.0"）
+      transformers  : transformers 库版本
+      cuda_available: 运行环境是否有可用 GPU（bool）
+      gpu_name      : 第一块 GPU 的名字（无 GPU 时为 None）
+    """
+    import platform
+    import sys
+
+    fp = {
+        "python": platform.python_version(),
+        "torch": None,
+        "torch_cuda": None,
+        "transformers": None,
+        "cuda_available": False,
+        "gpu_name": None,
+    }
+    try:
+        import torch
+        fp["torch"] = torch.__version__
+        fp["torch_cuda"] = torch.version.cuda
+        fp["cuda_available"] = bool(torch.cuda.is_available())
+        if torch.cuda.is_available() and torch.cuda.device_count() > 0:
+            fp["gpu_name"] = torch.cuda.get_device_name(0)
+    except ImportError:
+        pass  # torch 未安装时保留 None（不至于让指纹函数本身崩掉）
+    try:
+        import transformers
+        fp["transformers"] = transformers.__version__
+    except ImportError:
+        pass
+    return fp
+
+
 # ===========================================================================
 # 第二部分：Recirculation 顺序前向（核心）
 # ===========================================================================

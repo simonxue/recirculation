@@ -1,0 +1,12 @@
+# Recirculation 复现项目依赖
+# 开发环境实测版本（见 reading.md §1）：
+#   torch 2.11.0+cu130 / transformers 4.57.6 / datasets 5.0
+#
+# 注意：
+#   - PyTorch 的 CUDA 版需按 https://pytorch.org/get-started/locally/
+#     官方指引安装（选自己的 CUDA 版本），不要用下面这行通用安装：
+#   - CPU 也可以跑（自动降级 float32），但 recirculation 是顺序前向，
+#     速度会慢很多，只建议用 --text 做冒烟自检。
+torch>=2.4
+transformers>=4.46
+datasets>=2.20

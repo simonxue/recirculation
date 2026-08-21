@@ -31,7 +31,8 @@ import torch
 import torch.nn.functional as F
 
 from recirculation import (load_model, eval_baseline_ppl, recirc_logits,
-                           perplexity_from_logits, RecircParams)
+                           perplexity_from_logits, RecircParams,
+                           get_env_fingerprint)
 
 
 def get_pg19_docs(n_docs: int, min_len: int = 4000):
@@ -175,7 +176,8 @@ def main():
 
     with open(args.out, "w") as f:
         json.dump({"baseline_ppl": ppl_b, "n_windows": len(windows),
-                   "window": args.window, "results": results}, f, indent=2)
+                   "window": args.window, "results": results,
+                   "env": get_env_fingerprint()}, f, indent=2)
     print(f"\n结果已保存: {args.out}")
 
 

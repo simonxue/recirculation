@@ -7,3 +7,21 @@
 # Python
 __pycache__/
 *.pyc
+*.pyo
+*.egg-info/
+build/
+dist/
+venv/
+.venv/
+
+# 环境 / 密钥（永远不要提交）
+.env
+.env.*
+*.token
+.netrc
+
+# 编辑器 / 系统
+.DS_Store
+.idea/
+.vscode/
+*.swp

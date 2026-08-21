@@ -29,7 +29,8 @@ import time       # 计时
 import torch      # PyTorch
 
 from recirculation import (ModelBundle, RecircParams, eval_baseline_ppl,
-                           load_model, perplexity_from_logits, recirc_logits)
+                           get_env_fingerprint, load_model,
+                           perplexity_from_logits, recirc_logits)
 
 # 数据集配置表：名字 -> (HuggingFace 仓库 id, 文本字段名, 划分)
 DATASET_CONFIG = {
@@ -149,7 +150,7 @@ def main():
 
     results = {"model": args.model, "params": params.__dict__,
                "windows": args.n_windows, "window_len": args.window,
-               "datasets": {}}
+               "datasets": {}, "env": get_env_fingerprint()}
 
     # ---------- 对每个数据集评估 ----------
     for ds in args.datasets:

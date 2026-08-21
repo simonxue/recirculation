@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  smoke-test:
+    name: Smoke test (CPU, tiny model)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements.txt
+
+      - name: Run smoke test
+        # 用 tiny-random Gemma3（公开、无需 HF token）验证整条管线：
+        # 模型加载 → baseline ppl → recirc 前向 → α=0 一致性
+        run: python3 smoke_test.py
