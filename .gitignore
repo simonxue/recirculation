@@ -19,6 +19,7 @@ venv/
 .env.*
 *.token
 .netrc
+.gh_config/
 
 # 编辑器 / 系统
 .DS_Store
