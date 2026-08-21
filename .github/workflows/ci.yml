@@ -21,7 +21,6 @@ jobs:
           pip install --upgrade pip
           pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install -r requirements.txt
-
       - name: Run smoke test
         # 用 tiny-random Gemma3（公开、无需 HF token）验证整条管线：
         # 模型加载 → baseline ppl → recirc 前向 → α=0 一致性

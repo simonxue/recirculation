@@ -1,5 +1,5 @@
 # Recirculation 复现项目依赖
-# 开发环境实测版本（见 reading.md §1）：
+# 开发/复现环境实测版本（见 reading.md §1）：
 #   torch 2.11.0+cu130 / transformers 4.57.6 / datasets 5.0
 #
 # 注意：
@@ -7,6 +7,8 @@
 #     官方指引安装（选自己的 CUDA 版本），不要用下面这行通用安装：
 #   - CPU 也可以跑（自动降级 float32），但 recirculation 是顺序前向，
 #     速度会慢很多，只建议用 --text 做冒烟自检。
+#   - transformers 锁定 <5：本项目的 Gemma3 手动逐层调用基于 4.x 的
+#     position_embeddings_global/local API；5.x 重构了该接口。
 torch>=2.4
-transformers>=4.46
+transformers>=4.46,<5
 datasets>=2.20

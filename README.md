@@ -83,7 +83,8 @@ baseline ppl = 27.30（窗口含文档中后部更难位置，基线更高）：
 
 - Python ≥ 3.10
 - PyTorch ≥ 2.4（CUDA 版按 [pytorch.org](https://pytorch.org/get-started/locally/) 安装；CPU 也能跑，但 recirculation 是顺序前向，速度很慢）
-- `transformers`、`datasets`
+- `transformers` **4.x**（本项目基于 4.x 的 Gemma3 层接口实现；5.x 重构了该 API，会给出明确报错。复现环境实测版本 4.57.6）
+- `datasets`
 
 ```bash
 pip install -r requirements.txt

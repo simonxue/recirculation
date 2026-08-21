@@ -102,6 +102,16 @@ def load_model(model_name: str = "google/gemma-3-1b-pt", device=None, dtype=None
     注意：google/gemma-3-1b-pt 是"受限"（gated）模型，下载权重必须带
     有效的 HF token（在 https://huggingface.co/settings/tokens 申请）。
     """
+    # transformers 5.x 重构了 Gemma3 的层接口与 KV cache 架构（单一
+    # position_embeddings 入参、CacheLayer 化），本实现基于 4.x API。
+    # 5.x 上直接给出明确报错，避免运行到一半才暴露不兼容。
+    import transformers as _tf
+    if int(_tf.__version__.split(".")[0]) >= 5:
+        raise RuntimeError(
+            f"本实现基于 transformers 4.x API（当前安装: {_tf.__version__}）。\n"
+            "请安装 4.x 系列：pip install 'transformers>=4.46,<5' "
+            "（复现环境实测版本为 4.57.6，见 reading.md §1）。"
+        )
     if token is None:
         # 从环境变量读取 token；未设置则为 None（公开模型可以不要）
         token = os.environ.get("HF_TOKEN")
@@ -342,17 +352,75 @@ def recirc_logits(bundle: ModelBundle, input_ids: torch.Tensor, params: RecircPa
         rotary_global = None
         rotary_local = None
         if hasattr(model_emb, "rotary_emb"):
+            # 【transformers 版本兼容】
+            #   transformers 4.x（如 4.57.6）：
+            #     rotary_emb(x, position_ids)  +  rotary_emb_local(x, position_ids)
+            #     层的入参是 position_embeddings_global / position_embeddings_local
+            #   transformers 5.x（>=5.0 重构）：
+            #     单一 rotary_emb(x, position_ids, layer_type)，
+            #     层的入参是 position_embeddings（按 layer_type 分发）
+            # 这里用 inspect 探测签名，两套 API 都兼容。
+            import inspect
+            rotary_emb = model_emb.rotary_emb
+            fwd_params = inspect.signature(rotary_emb.forward).parameters
+            use_layer_type_api = "layer_type" in fwd_params  # True = 5.x 新 API
+
             # 用一个全零的占位向量调 rotary_emb（它只依赖位置编号，
             # 不依赖内容），得到每个位置的 cos/sin 表
             probe = torch.zeros(1, seq, hidden, device=device, dtype=bundle.dtype)
-            rotary_global = model_emb.rotary_emb(probe, pos_ids)       # 全局层用
-            rotary_local = model_emb.rotary_emb_local(probe, pos_ids)  # 滑动窗口层用
+            if use_layer_type_api:
+                # 5.x：按 config.layer_types 逐类型生成 position_embeddings
+                layer_types = getattr(config, "layer_types", ["full_attention"])
+                rotary_by_type = {
+                    lt: rotary_emb(probe, pos_ids, lt) for lt in set(layer_types)
+                }
+                rotary_global = rotary_by_type.get("full_attention")
+                rotary_local = rotary_by_type.get("sliding_attention")
+            else:
+                # 4.x：全局层 + 滑动窗口层两套 cos/sin
+                rotary_global = rotary_emb(probe, pos_ids)
+                rotary_local = getattr(model_emb, "rotary_emb_local", None) \
+                    and model_emb.rotary_emb_local(probe, pos_ids) or None
+
+            # 层调用器：屏蔽 4.x / 5.x 层入参差异。
+            # 4.x 层签名：position_embeddings_global / position_embeddings_local
+            # 5.x 层签名：position_embeddings（按层类型取对应的表）
+            first_layer = model_emb.layers[0]
+            layer_uses_global_local = "position_embeddings_global" in \
+                inspect.signature(first_layer.forward).parameters
+
+            def call_layer(layer, x, pe_global, pe_local, attn_mask, pos, cache_pos):
+                """调用单个 transformer 层，自动适配 4.x / 5.x 的入参约定。"""
+                kwargs = {
+                    "attention_mask": attn_mask,
+                    "position_ids": pos,
+                    "past_key_values": kv_cache,
+                    "use_cache": True,
+                    "cache_position": cache_pos,
+                }
+                if layer_uses_global_local:
+                    # 4.x：两个 RoPE 表都传，层内部按自己的 attention_type 取用
+                    kwargs["position_embeddings_global"] = pe_global
+                    kwargs["position_embeddings_local"] = pe_local
+                else:
+                    # 5.x：只传本层类型对应的那张表
+                    lt = getattr(layer, "attention_type", None) or \
+                        getattr(layer, "layer_type", "full_attention")
+                    kwargs["position_embeddings"] = \
+                        rotary_by_type.get(lt, pe_global) if use_layer_type_api \
+                        else pe_global
+                return layer(x, **kwargs)
 
         # Gemma3 的注意力分两种：full_attention（全局）与
         # sliding_attention（只关注最近 sliding_window=512 个 token）。
         # 两种层需要不同的掩码生成函数，按层类型分发。
+        # 注意：层类型的属性名 4.x 叫 attention_type，5.x 叫 layer_type。
+        def layer_attn_type(layer):
+            return getattr(layer, "attention_type", None) or \
+                getattr(layer, "layer_type", None)
+
         has_sliding = any(
-            getattr(l, "attention_type", "") == "sliding_attention" for l in model_emb.layers
+            layer_attn_type(l) == "sliding_attention" for l in model_emb.layers
         )
         if has_sliding:
             from transformers.models.gemma3.modeling_gemma3 import (
@@ -374,6 +442,11 @@ def recirc_logits(bundle: ModelBundle, input_ids: torch.Tensor, params: RecircPa
                 "full_attention": create_causal_mask,
                 "sliding_attention": create_sliding_window_causal_mask,
             }
+            # 4.x / 5.x 的掩码函数签名不同（5.x 用 inputs_embeds、无
+            # cache_position、多了 layer_idx），按签名只传存在的参数。
+            import inspect as _inspect
+            _mask_params = _inspect.signature(create_causal_mask).parameters
+            _mask_arg_names = set(_mask_params)
         else:
             mask_fns = None   # 没有滑动窗口的模型不需要
 
@@ -387,15 +460,22 @@ def recirc_logits(bundle: ModelBundle, input_ids: torch.Tensor, params: RecircPa
             """
             if mask_fns is None:
                 return None
-            mkw = {
+            # 统一的候选参数（4.x 与 5.x 的公共子集）
+            base_kw = {
                 "config": config,
-                "input_embeds": step_x,       # 只用来推断 batch/seq/dtype
                 "attention_mask": None,       # 无 padding，不需要额外掩码
-                "cache_position": step_cache_pos,
                 # cache 非空时把 kv_cache 传进去，函数会据此算 kv_length
                 "past_key_values": step_cache_pos.numel() > 0 and kv_cache or None,
                 "position_ids": step_pos_ids,
             }
+            # 4.x：input_embeds + cache_position；5.x：inputs_embeds
+            if "inputs_embeds" in _mask_arg_names:
+                base_kw["inputs_embeds"] = step_x
+            else:
+                base_kw["input_embeds"] = step_x
+                base_kw["cache_position"] = step_cache_pos
+            # 只传该函数签名里存在的参数
+            mkw = {k: v for k, v in base_kw.items() if k in _mask_arg_names}
             # 对每种层类型各生成一个掩码，返回 {"full_attention": ..., "sliding_attention": ...}
             return {k: fn(**mkw) for k, fn in mask_fns.items()}
 
@@ -439,17 +519,9 @@ def recirc_logits(bundle: ModelBundle, input_ids: torch.Tensor, params: RecircPa
             for l in range(n_layers):
                 layer = model.model.layers[l]   # 第 l 个 transformer 块
                 # 手动调用该层（不经过模型的整体 forward），以便拿到中间层输出
-                x = layer(
-                    x,
-                    position_embeddings_global=pe_global,   # RoPE cos/sin（全局层）
-                    position_embeddings_local=pe_local,     # RoPE cos/sin（滑动层）
-                    # 按该层类型取对应掩码；无掩码时传 None
-                    attention_mask=attn_mask[layer.attention_type] if attn_mask is not None else None,
-                    position_ids=pos,
-                    past_key_values=kv_cache,   # 传入共享 KV cache（层内部自动更新）
-                    use_cache=True,
-                    cache_position=cache_pos,
-                )
+                x = call_layer(layer, x, pe_global, pe_local,
+                               attn_mask[layer_attn_type(layer)] if attn_mask is not None else None,
+                               pos, cache_pos)
                 # 层的返回是元组 (hidden_states, ...)，取第一个元素
                 x = x[0] if isinstance(x, (tuple, list)) else x
                 first_pass_residuals[l + 1] = x   # 记录第 l 层的残差输出
@@ -478,16 +550,9 @@ def recirc_logits(bundle: ModelBundle, input_ids: torch.Tensor, params: RecircPa
             x = z_d_new                            # 第二遍的起点是混合后的向量
             for l in range(params.dest, n_layers):
                 layer = model.model.layers[l]
-                x = layer(
-                    x,
-                    position_embeddings_global=pe_global,
-                    position_embeddings_local=pe_local,
-                    attention_mask=attn_mask[layer.attention_type] if attn_mask is not None else None,
-                    position_ids=pos,
-                    past_key_values=kv_cache,   # 覆盖模式下，d..top 层的 KV 被原位替换
-                    use_cache=True,
-                    cache_position=cache_pos,
-                )
+                x = call_layer(layer, x, pe_global, pe_local,
+                               attn_mask[layer_attn_type(layer)] if attn_mask is not None else None,
+                               pos, cache_pos)
                 x = x[0] if isinstance(x, (tuple, list)) else x
 
             # ---- 由第二遍的最终隐藏向量计算 logits ----
