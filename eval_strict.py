@@ -53,9 +53,10 @@ def get_pg19_docs(n_docs: int, min_len: int = 4000):
     return docs
 
 
-def sample_windows(tokenizer, docs, positions: int, window: int, seed: int):
+def sample_windows(tokenizer, docs, positions: int, window: int, seed: int,
+                   device):
     """
-    从每个文档取 positions 个随机位置窗口，返回 token id 列表。
+    从每个文档取 positions 个随机位置窗口，返回 token id 列表（已在目标设备）。
 
     策略：文档开头必取一个（论文实验的一致性），其余在文档中后部
     随机取。窗口起点用随机种子控制，保证可复现。
@@ -81,7 +82,7 @@ def sample_windows(tokenizer, docs, positions: int, window: int, seed: int):
         for _ in range(positions - 1):
             starts.append(rng.randint(1, max_start))
         for s in starts:
-            windows.append(ids[s:s + window])
+            windows.append(ids[s:s + window].to(device))
     return windows
 
 
@@ -109,7 +110,7 @@ def main():
     print(f"\n=== 获取 {args.n_docs} 个 PG-19 文档，每文档取 {args.positions} 个位置窗口 ===")
     docs = get_pg19_docs(args.n_docs)
     windows = sample_windows(bundle.tokenizer, docs, args.positions,
-                             args.window, args.seed)
+                             args.window, args.seed, bundle.device)
     print(f"共 {len(windows)} 个窗口，每窗口 {args.window} token")
 
     # ---------- baseline（并行 prefill，快）----------
