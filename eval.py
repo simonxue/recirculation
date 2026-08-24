@@ -34,10 +34,21 @@
 """
 import argparse   # 命令行参数
 import json       # 结果存成 JSON 文件
+import logging    # 抑制库的 info 级日志（否则刷屏干扰结果查看）
 import math       # math.log / math.exp（累加困惑度用）
 import os         # 追加模式下检查结果库文件是否存在
 import random     # 窗口位置采样
 import time       # 计时
+import warnings   # 过滤上游库的干扰性警告（torch_dtype 弃用等）
+
+# ---------------------------------------------------------------------------
+# 日志/警告抑制：只保留 WARNING 及以上，隐藏 datasets/transformers/torch 的
+# info 级刷屏与已知弃用噪音，让评估结果在终端里干净可读。
+# ---------------------------------------------------------------------------
+logging.getLogger("datasets").setLevel(logging.WARNING)
+logging.getLogger("transformers").setLevel(logging.WARNING)
+logging.getLogger("torch").setLevel(logging.WARNING)
+warnings.filterwarnings("ignore", message="torch_dtype.*deprecated")
 
 import torch      # PyTorch
 import torch.nn.functional as F
@@ -145,7 +156,12 @@ def get_pg19_docs(n_docs: int, min_len: int = 4000):
 def sample_windows(tokenizer, docs, positions: int, window: int, seed: int,
                    device):
     """
-    从每个文档取 positions 个位置窗口，返回 token id 列表（已在目标设备）。
+    从每个文档取 positions 个位置窗口。
+
+    返回 (windows, win_meta)：
+      windows  : list[1D LongTensor]，窗口 token id（已在目标设备）
+      win_meta : list[(doc_idx, start_token)]，每个窗口的文档编号与
+                 token 级起始位置（0 = 文档开头，用于打印位置信息）
 
     策略：文档开头必取一个（与论文实验一致性），其余在文档中后部
     随机取。窗口起点用随机种子控制，保证可复现。
@@ -156,8 +172,8 @@ def sample_windows(tokenizer, docs, positions: int, window: int, seed: int,
       测出真实效果。
     """
     rng = random.Random(seed)
-    windows = []
-    for text in docs:
+    windows, win_meta = [], []
+    for di, text in enumerate(docs):
         # 先 token 化整个文档开头部分（最多 8 倍窗口长度，控制内存）
         ids = tokenizer(
             text, truncation=True, max_length=window * 8,
@@ -172,7 +188,8 @@ def sample_windows(tokenizer, docs, positions: int, window: int, seed: int,
             starts.append(rng.randint(1, max_start))
         for s in starts:
             windows.append(ids[s:s + window].to(device))
-    return windows
+            win_meta.append((di, s))
+    return windows, win_meta
 
 
 def tokenize_windows(bundle: ModelBundle, texts, window: int, device):
@@ -196,6 +213,21 @@ def weighted_ppl(ppls_and_counts):
     nll_sum = sum(math.log(p) * n for p, n in ppls_and_counts)
     cnt_sum = sum(n for _, n in ppls_and_counts)
     return math.exp(nll_sum / cnt_sum)
+
+
+def _summarize(text: str, limit: int = 90) -> str:
+    """把一段文本压成单行摘要：折叠空白后截断到 limit 字符。"""
+    line = " ".join(text.split())
+    return line if len(line) <= limit else line[:limit - 1] + "…"
+
+
+def _window_summary(tokenizer, ids) -> str:
+    """把窗口 token id 序列解码成单行摘要（供打印窗口内容用）。"""
+    try:
+        text = tokenizer.decode(ids, skip_special_tokens=True)
+    except Exception:
+        return "<decode failed>"
+    return _summarize(text)
 
 
 def parse_pairs(pairs):
@@ -259,6 +291,14 @@ def main():
     # 显式给了 --n_docs/--positions 且数据集为 pg19 时用文档模式，
     # 否则走通用窗口模式（builtin / arxiv / c4 / 单文档随机窗口）。
     doc_mode = (args.n_docs is not None) and "pg19" in args.datasets
+    print(f"\n===== 配置概览 =====\n"
+          f"模型 {args.model} | 数据集 {args.datasets} | 窗口 {args.window} token"
+          + (f" | 文档模式 {args.n_docs} 文档 × {args.positions} 位置"
+             if doc_mode else f" | {args.n_windows} 个随机窗口") +
+          f"\n扫描: α={alphas} × 层对 {[f'{s}-{d}' for s, d in pairs]}"
+          + (f" | ramp={ramp}" if ramp else "") +
+          (f" | seed={args.seed}" if args.seed else "") +
+          (f" | 只跑 recirc（无 baseline）" if args.no_baseline else ""))
 
     results = {"model": args.model, "params": {"alphas": alphas,
                "layer_pairs": [f"{s}-{d}" for s, d in pairs], "ramp": ramp},
@@ -268,15 +308,31 @@ def main():
     for ds in args.datasets:
         print(f"\n===== dataset: {ds} =====")
         if doc_mode:
-            print(f"=== 获取 {args.n_docs} 个 PG-19 文档，每文档取 "
-                  f"{args.positions} 个位置窗口 ===")
+            print(f"--- 取 {args.n_docs} 个 PG-19 文档，每文档取 "
+                  f"{args.positions} 个位置窗口 ---")
             docs = get_pg19_docs(args.n_docs)
-            ids_list = sample_windows(bundle.tokenizer, docs, args.positions,
-                                      args.window, args.seed, device)
-            print(f"共 {len(ids_list)} 个窗口，每窗口 {args.window} token")
+            # 展示每个文档的来源摘要（书名/章节名 = 文本开头一行）
+            for di, doc in enumerate(docs):
+                title = _summarize(doc.split("\n")[0], 60) if doc.split("\n") else ""
+                print(f"  [文档 {di}] {title or '(无标题行)'}  "
+                      f"({len(doc):,} 字符)")
+            ids_list, win_meta = sample_windows(
+                bundle.tokenizer, docs, args.positions,
+                args.window, args.seed, device)
+            print(f"共 {len(ids_list)} 个窗口，每窗口 {args.window} token：")
+            for i, (di, start) in enumerate(win_meta):
+                # 用文档词数估算位置占比（token 起点是采样值，足够直观）
+                frac = start / max(1, len(docs[di].split()) // 4)
+                print(f"  [窗口 {i}] 文档 {di} @ 位置≈{frac*100:.0f}%  "
+                      f"{_window_summary(bundle.tokenizer, ids_list[i])}")
         else:
+            print(f"--- 取 {args.n_windows} 个窗口（随机位置）---")
             texts = get_windows(ds, args.n_windows, args.window, args.seed)
             ids_list = tokenize_windows(bundle, texts, args.window, device)
+            print(f"共 {len(ids_list)} 个窗口，每窗口 {args.window} token")
+            # 展示前 3 个窗口的文本摘要，让用户直观看到测的是什么内容
+            for i, ids in enumerate(ids_list[:3]):
+                print(f"  [窗口 {i}] {_window_summary(bundle.tokenizer, ids)}")
 
         # ---------- baseline（并行 prefill，快）----------
         base_items = []   # (ppl, token 数)
@@ -285,46 +341,64 @@ def main():
             if not args.no_baseline:
                 p = eval_baseline_ppl(bundle, ids)
                 base_items.append((p, ids.numel() - 1))
+                print(f"  [baseline] 窗口 {i}/{len(ids_list)}: "
+                      f"ppl={p:.3f}  ({(time.time()-t0):.0f}s)")
         ppl_b = weighted_ppl(base_items) if base_items else None
-        print(f"[baseline] ppl = {ppl_b:.4f}  ({len(ids_list)} 窗口, "
+        print(f"[baseline] 总体 ppl = {ppl_b:.4f}  ({len(ids_list)} 窗口, "
               f"{time.time()-t0:.0f}s)")
 
         # ---------- recirculation：扫描 α × 层对 ----------
         results["datasets"][ds] = {"baseline_ppl": ppl_b, "results": []}
         best = None   # 记录最优配置（供诊断用）
-        for alpha in alphas:
-            for src, dst in pairs:
-                t0 = time.time()
-                r_items = []
-                per_win = []
-                for ids in ids_list:
-                    logits = recirc_logits(
-                        bundle, ids,
-                        RecircParams(source=src, dest=dst, alpha=alpha,
-                                     ramp=ramp))
-                    p = perplexity_from_logits(logits[:-1], ids[1:])
-                    r_items.append((p, ids.numel() - 1))
-                    per_win.append(p)
-                ppl_r = weighted_ppl(r_items)
-                pct = (ppl_r / ppl_b - 1) * 100 if ppl_b else None
-                wins = (sum(1 for i, p in enumerate(per_win)
-                            if p < base_items[i][0])
-                        if base_items else None)
-                print(f"α={alpha:.2f} {src}-{dst}: ppl={ppl_r:.4f}  "
-                      f"{pct:+.2f}%" if pct is not None else
-                      f"α={alpha:.2f} {src}-{dst}: ppl={ppl_r:.4f}  "
-                      f"(--no-baseline 无相对变化)" +
-                      (f"  (窗口胜出 {wins}/{len(ids_list)})"
-                       if wins is not None else "") +
-                      f"  [{time.time()-t0:.0f}s]")
-                entry = {"alpha": alpha, "src": src, "dst": dst,
-                         "ppl": ppl_r, "pct_change": pct,
-                         "per_window": per_win, "wins": wins}
-                results["datasets"][ds]["results"].append(entry)
-                if best is None or (pct is not None and
-                                    (best["pct_change"] is None or
-                                     pct < best["pct_change"])):
-                    best = entry
+        n_cfg = len(alphas) * len(pairs)
+        for ci, (alpha, (src, dst)) in enumerate(
+                ((a, p) for a in alphas for p in pairs)):
+            t0 = time.time()
+            r_items = []
+            per_win = []
+            for i, ids in enumerate(ids_list):
+                logits = recirc_logits(
+                    bundle, ids,
+                    RecircParams(source=src, dest=dst, alpha=alpha,
+                                 ramp=ramp))
+                p = perplexity_from_logits(logits[:-1], ids[1:])
+                r_items.append((p, ids.numel() - 1))
+                per_win.append(p)
+                print(f"  [recirc {ci+1}/{n_cfg}] α={alpha:.2f} {src}-{dst} "
+                      f"窗口 {i}/{len(ids_list)}: ppl={p:.3f}  "
+                      f"({time.time()-t0:.0f}s)")
+            ppl_r = weighted_ppl(r_items)
+            pct = (ppl_r / ppl_b - 1) * 100 if ppl_b else None
+            wins = (sum(1 for i, p in enumerate(per_win)
+                        if p < base_items[i][0])
+                    if base_items else None)
+            print(f"  → α={alpha:.2f} {src}-{dst}: ppl={ppl_r:.4f}  "
+                  f"{pct:+.2f}%" if pct is not None else
+                  f"  → α={alpha:.2f} {src}-{dst}: ppl={ppl_r:.4f}  "
+                  f"(--no-baseline 无相对变化)" +
+                  (f"  (窗口胜出 {wins}/{len(ids_list)})"
+                   if wins is not None else "") +
+                  f"  [{time.time()-t0:.0f}s]")
+            entry = {"alpha": alpha, "src": src, "dst": dst,
+                     "ppl": ppl_r, "pct_change": pct,
+                     "per_window": per_win, "wins": wins}
+            results["datasets"][ds]["results"].append(entry)
+            if best is None or (pct is not None and
+                                (best["pct_change"] is None or
+                                 pct < best["pct_change"])):
+                best = entry
+
+        # ---------- 汇总表：本数据集全部配置一目了然 ----------
+        print(f"\n--- {ds} 汇总 ---")
+        print(f"{'α':>5}  {'层对':>6}  {'ppl':>9}  {'变化':>8}  {'胜出':>9}")
+        for e in results["datasets"][ds]["results"]:
+            win = (f"{e['wins']}/{len(ids_list)}" if e["wins"] is not None
+                   else "—")
+            chg = f"{e['pct_change']:+.2f}%" if e["pct_change"] is not None \
+                else "—"
+            mark = " ◀最优" if e is best else ""
+            print(f"{e['alpha']:>5.2f}  {e['src']}-{e['dst']:>4}  "
+                  f"{e['ppl']:>9.4f}  {chg:>8}  {win:>9}{mark}")
 
         # ---------- 逐位置诊断（最优配置，对照论文图 9）----------
         if args.diagnose and best is not None and not args.no_baseline:
