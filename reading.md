@@ -62,6 +62,27 @@
 - 排坑：embed_tokens 需 2D 输入；Gemma3 层需外部传 RoPE；decoder layer 不返回 KV（靠 Cache 对象内部更新）；eager attention 自行截取 mask
 - 代码已润色为教学式注释（提交 `f27825d`，逻辑零改动验证通过）
 
+## 2.1 为什么 recirculation 必须串行：并行 prefill vs 顺序前向
+
+**基线（`eval_baseline_ppl`）是并行 prefill**：整个窗口一次前向，所有位置的表示同层同时算出。因果掩码只约束"位置 t 能看什么"（只能看 t 之前的 token），不约束"何时算"——位置 t+1 在层 l 的表示只依赖层 l−1 的表示，而后者已同层并行算好。位置之间不存在隐藏状态依赖，因此可以整体并行。
+
+**recirc 必须逐 token 串行**，因为算法制造了标准 prefill 不存在的**跨 token 依赖链**：
+
+```
+token t 第二遍:  z_d'(t) = α·f(z_s(t)) + β·z_d(t)     ← 深层信息混进浅层
+         ↓  OverwriteCache 覆盖 dest..top 层在位置 t 的 KV
+token t+1 第一遍: attention 必须看到被覆盖后的 KV      ← 依赖 token t 的结果
+```
+
+这正是代码注释里明确的语义（recirculation.py）：*"本轮第二遍把 dest..top 层当前位置的 KV 覆盖成了 recirculated 版本。下一轮 token 的第一遍在 attention 时就会看到这个覆盖后的 KV——后续 token 应当基于已经 recirculate 过的历史状态继续。"* 也就是说 token t+1 的浅层表示依赖 token t 的深层输出。这是 recirculation 为"循环状态跟踪"（行为接近 RNN）付出的**算法代价**，不是实现选择——论文也明确把"prefill 阶段必须串行处理、无法并行化"列为代价（§2）。
+
+**实际代价**：
+
+- **FLOPs ≈ 2× 普通 prefill**：每 token = 第一遍全部 26 层 + 第二遍 dest..top 层（dest=4 时 22 层）
+- **GPU 利用率低**：每步只处理 1 个 token（batch=1），算力远未饱和，实际耗时远高于 2×——实验 B 的 18 窗口 × 1024 token 在 RTX 2000 Ada 上约 2.5 GPU 小时，而基线只是数次大前向、瞬间完成
+- **非实现问题**：α=0 时 recirc 应退化为标准前向，实测 ppl 差异仅 0.0028%（§3.1），证明串行增量路径实现正确，并行/串行差异完全来自算法本身
+- 论文的缓解方向是块级 recirculation（块内并行、块间串行），尚未实现
+
 ## 3. 实验数据
 
 ### 3.1 正确性校验：α=0 一致性
