@@ -38,19 +38,20 @@ Recirculation 核心前向实现（arXiv:2608.17981）
     {源层=11, 目标层=4}，与这里直接对应（论文脚注 4 说明 PyTorch/HF
     复现与论文的 JAX 实现结果一致）。
 """
-import math          # 数学函数（这里只用 math.exp 计算困惑度）
-import os            # 读取环境变量（HF_TOKEN）
-import time          # 计时（打印每步耗时）
-from dataclasses import dataclass, field   # 定义"参数包"数据类
 
-import torch         # PyTorch 核心库
-import torch.nn.functional as F            # PyTorch 函数式接口（log_softmax 等）
+import math  # 数学函数（这里只用 math.exp 计算困惑度）
+import os  # 读取环境变量（HF_TOKEN）
+import time  # 计时（打印每步耗时）
+from dataclasses import dataclass, field  # 定义"参数包"数据类
+
+import torch  # PyTorch 核心库
+import torch.nn.functional as F  # PyTorch 函数式接口（log_softmax 等）
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
-
 
 # ===========================================================================
 # 第一部分：模型加载
 # ===========================================================================
+
 
 @dataclass
 class ModelBundle:
@@ -70,6 +71,7 @@ class ModelBundle:
       n_layers  : transformer 块的数量（Gemma3 1B 是 26）
       hidden    : 隐藏层维度（Gemma3 1B 是 1152）
     """
+
     model: torch.nn.Module
     tokenizer: AutoTokenizer
     config: AutoConfig
@@ -88,8 +90,9 @@ class ModelBundle:
         return self.model.lm_head
 
 
-def load_model(model_name: str = "google/gemma-3-1b-pt", device=None, dtype=None,
-               token=None) -> ModelBundle:
+def load_model(
+    model_name: str = "google/gemma-3-1b-pt", device=None, dtype=None, token=None
+) -> ModelBundle:
     """
     加载预训练模型并打包成 ModelBundle。
 
@@ -106,6 +109,7 @@ def load_model(model_name: str = "google/gemma-3-1b-pt", device=None, dtype=None
     # position_embeddings 入参、CacheLayer 化），本实现基于 4.x API。
     # 5.x 上直接给出明确报错，避免运行到一半才暴露不兼容。
     import transformers as _tf
+
     if int(_tf.__version__.split(".")[0]) >= 5:
         raise RuntimeError(
             f"本实现基于 transformers 4.x API（当前安装: {_tf.__version__}）。\n"
@@ -127,17 +131,29 @@ def load_model(model_name: str = "google/gemma-3-1b-pt", device=None, dtype=None
     # attn_implementation="eager" 表示用朴素的注意力实现（不用 flash-attn），
     # 因为我们后面要逐层手动调用，朴素实现最可控。
     model = AutoModelForCausalLM.from_pretrained(
-        model_name, torch_dtype=dtype, config=config, attn_implementation="eager",
+        model_name,
+        torch_dtype=dtype,
+        config=config,
+        attn_implementation="eager",
         token=token,
     )
-    model = model.to(device).eval()   # 移到目标设备，并切到"评估模式"（关 dropout）
+    model = model.to(device).eval()  # 移到目标设备，并切到"评估模式"（关 dropout）
     tokenizer = AutoTokenizer.from_pretrained(model_name, token=token)
-    n_layers = config.num_hidden_layers   # transformer 块数量
-    hidden = config.hidden_size           # 隐藏向量维度
-    print(f"[load] {model_name}  layers={n_layers}  hidden={hidden}  "
-          f"device={device}  dtype={dtype}")
-    return ModelBundle(model=model, tokenizer=tokenizer, config=config,
-                       device=device, dtype=dtype, n_layers=n_layers, hidden=hidden)
+    n_layers = config.num_hidden_layers  # transformer 块数量
+    hidden = config.hidden_size  # 隐藏向量维度
+    print(
+        f"[load] {model_name}  layers={n_layers}  hidden={hidden}  "
+        f"device={device}  dtype={dtype}"
+    )
+    return ModelBundle(
+        model=model,
+        tokenizer=tokenizer,
+        config=config,
+        device=device,
+        dtype=dtype,
+        n_layers=n_layers,
+        hidden=hidden,
+    )
 
 
 def get_env_fingerprint() -> dict:
@@ -169,6 +185,7 @@ def get_env_fingerprint() -> dict:
     }
     try:
         import torch
+
         fp["torch"] = torch.__version__
         fp["torch_cuda"] = torch.version.cuda
         fp["cuda_available"] = bool(torch.cuda.is_available())
@@ -178,6 +195,7 @@ def get_env_fingerprint() -> dict:
         pass  # torch 未安装时保留 None（不至于让指纹函数本身崩掉）
     try:
         import transformers
+
         fp["transformers"] = transformers.__version__
     except ImportError:
         pass
@@ -187,6 +205,7 @@ def get_env_fingerprint() -> dict:
 # ===========================================================================
 # 第二部分：Recirculation 顺序前向（核心）
 # ===========================================================================
+
 
 @dataclass
 class RecircParams:
@@ -202,16 +221,20 @@ class RecircParams:
              （论文附录 B.3：ramp=10）；设 0 可关闭预热
     normalize : 是否把源向量缩放到目标向量的 L2 长度（论文公式 2）
     """
-    source: int          # 源层索引（0-based）
-    dest: int            # 目标层索引（0-based）
+
+    source: int  # 源层索引（0-based）
+    dest: int  # 目标层索引（0-based）
     alpha: float = 0.15  # 混合系数 α（论文 Table 1 配置）
-    beta: float | None = None   # β，None 表示 β=1-α（1B 凸混合）
-    ramp: int = 10       # 1B ramping：前 ramp 个 token 线性起调（附录 B.3）；0 表示不 ramping
+    beta: float | None = None  # β，None 表示 β=1-α（1B 凸混合）
+    ramp: int = (
+        10  # 1B ramping：前 ramp 个 token 线性起调（附录 B.3）；0 表示不 ramping
+    )
     normalize: bool = True  # 源向量按 L2 范数归一化到目标层（公式 2）
 
 
-def _mix(src: torch.Tensor, dst: torch.Tensor, alpha: float, beta: float,
-         normalize: bool) -> torch.Tensor:
+def _mix(
+    src: torch.Tensor, dst: torch.Tensor, alpha: float, beta: float, normalize: bool
+) -> torch.Tensor:
     """
     实现论文公式 (1)(2)：把深层向量 src 按比例混入浅层向量 dst。
 
@@ -230,13 +253,19 @@ def _mix(src: torch.Tensor, dst: torch.Tensor, alpha: float, beta: float,
         # dst.norm(dim=-1)  : 每个向量的 L2 范数（长度），keepdim=True 保持维度便于广播
         # src.norm(dim=-1)  : 源向量的长度；+1e-12 防止除零
         # 整体效果：src × (dst长度 / src长度)，即把 src 缩放到 dst 的长度
-        src = src * (dst.norm(dim=-1, keepdim=True) / (src.norm(dim=-1, keepdim=True) + 1e-12))
+        src = src * (
+            dst.norm(dim=-1, keepdim=True) / (src.norm(dim=-1, keepdim=True) + 1e-12)
+        )
     # 加权混合：α 份缩放后的深层信息 + β 份原始浅层信息
     return alpha * src + beta * dst
 
 
-def recirc_logits(bundle: ModelBundle, input_ids: torch.Tensor, params: RecircParams,
-                  verbose: bool = False) -> torch.Tensor:
+def recirc_logits(
+    bundle: ModelBundle,
+    input_ids: torch.Tensor,
+    params: RecircParams,
+    verbose: bool = False,
+) -> torch.Tensor:
     """
     【核心函数】顺序 prefill + recirculation，返回每个位置的 logits。
 
@@ -269,8 +298,8 @@ def recirc_logits(bundle: ModelBundle, input_ids: torch.Tensor, params: RecircPa
     lm_head = bundle.lm_head
     config = bundle.config
 
-    seq = input_ids.numel()   # 序列长度（token 个数）
-    t0 = time.time()          # 起始时间（用于进度打印）
+    seq = input_ids.numel()  # 序列长度（token 个数）
+    t0 = time.time()  # 起始时间（用于进度打印）
 
     # ------------------------------------------------------------------
     # KV cache 准备：自定义 OverwriteCache
@@ -313,7 +342,7 @@ def recirc_logits(bundle: ModelBundle, input_ids: torch.Tensor, params: RecircPa
             """
             if self.overwrite_from is not None and layer_idx >= self.overwrite_from:
                 # ---- 覆盖模式：裁掉旧的最后一位，拼上新的 ----
-                layer = self.layers[layer_idx]        # 这一层的缓存容器
+                layer = self.layers[layer_idx]  # 这一层的缓存容器
                 k, v = layer.keys, layer.values
                 # k/v 形状 [B, H, S, D]（S 为已缓存 token 数）
                 # k[..., :-1, :] 去掉最后一个 token 的 K；再与新的拼上
@@ -323,8 +352,8 @@ def recirc_logits(bundle: ModelBundle, input_ids: torch.Tensor, params: RecircPa
             # ---- 追加模式：直接调用父类的正常逻辑 ----
             return super().update(key_states, value_states, layer_idx, cache_kwargs)
 
-    kv_cache = OverwriteCache(config)   # 全局 KV cache（所有层共享这一个对象）
-    kv_len = 0                          # 已处理的 token 数（即 cache 当前长度）
+    kv_cache = OverwriteCache(config)  # 全局 KV cache（所有层共享这一个对象）
+    kv_len = 0  # 已处理的 token 数（即 cache 当前长度）
 
     # ------------------------------------------------------------------
     # 残差流记录容器
@@ -337,9 +366,9 @@ def recirc_logits(bundle: ModelBundle, input_ids: torch.Tensor, params: RecircPa
 
     last_hidden = None  # 第一遍最终隐藏向量（目前仅作占位，未使用）
 
-    all_logits = []     # 收集每个 token 的 logits，最后拼成 [seq, vocab]
+    all_logits = []  # 收集每个 token 的 logits，最后拼成 [seq, vocab]
 
-    with torch.no_grad():   # 全程不计算梯度（推理模式，省显存省时间）
+    with torch.no_grad():  # 全程不计算梯度（推理模式，省显存省时间）
         # --------------------------------------------------------------
         # 预计算：rotary 位置编码 与 attention mask 生成函数
         # --------------------------------------------------------------
@@ -361,6 +390,8 @@ def recirc_logits(bundle: ModelBundle, input_ids: torch.Tensor, params: RecircPa
             #     层的入参是 position_embeddings（按 layer_type 分发）
             # 这里用 inspect 探测签名，两套 API 都兼容。
             import inspect
+
+            # model.model.rotary_emb是基于transformer的语言模型中的模块路径，这个路径下存放着旋转位置编码（RoPE）
             rotary_emb = model_emb.rotary_emb
             fwd_params = inspect.signature(rotary_emb.forward).parameters
             use_layer_type_api = "layer_type" in fwd_params  # True = 5.x 新 API
@@ -379,15 +410,22 @@ def recirc_logits(bundle: ModelBundle, input_ids: torch.Tensor, params: RecircPa
             else:
                 # 4.x：全局层 + 滑动窗口层两套 cos/sin
                 rotary_global = rotary_emb(probe, pos_ids)
-                rotary_local = getattr(model_emb, "rotary_emb_local", None) \
-                    and model_emb.rotary_emb_local(probe, pos_ids) or None
+                # rotary_emb_local是Gemma3模型架构中的局部旋转位置编码层。它和全局旋转位置编码层（rotary_emb）一起工作，
+                # 为局部注意力层提供标准的基础频率10kHz的旋转频率，而全局层则扩展到1MHz。
+                rotary_local = (
+                    getattr(model_emb, "rotary_emb_local", None)
+                    and model_emb.rotary_emb_local(probe, pos_ids)
+                    or None
+                )
 
             # 层调用器：屏蔽 4.x / 5.x 层入参差异。
             # 4.x 层签名：position_embeddings_global / position_embeddings_local
             # 5.x 层签名：position_embeddings（按层类型取对应的表）
             first_layer = model_emb.layers[0]
-            layer_uses_global_local = "position_embeddings_global" in \
-                inspect.signature(first_layer.forward).parameters
+            layer_uses_global_local = (
+                "position_embeddings_global"
+                in inspect.signature(first_layer.forward).parameters
+            )
 
             def call_layer(layer, x, pe_global, pe_local, attn_mask, pos, cache_pos):
                 """调用单个 transformer 层，自动适配 4.x / 5.x 的入参约定。"""
@@ -404,11 +442,14 @@ def recirc_logits(bundle: ModelBundle, input_ids: torch.Tensor, params: RecircPa
                     kwargs["position_embeddings_local"] = pe_local
                 else:
                     # 5.x：只传本层类型对应的那张表
-                    lt = getattr(layer, "attention_type", None) or \
-                        getattr(layer, "layer_type", "full_attention")
-                    kwargs["position_embeddings"] = \
-                        rotary_by_type.get(lt, pe_global) if use_layer_type_api \
+                    lt = getattr(layer, "attention_type", None) or getattr(
+                        layer, "layer_type", "full_attention"
+                    )
+                    kwargs["position_embeddings"] = (
+                        rotary_by_type.get(lt, pe_global)
+                        if use_layer_type_api
                         else pe_global
+                    )
                 return layer(x, **kwargs)
 
         # Gemma3 的注意力分两种：full_attention（全局）与
@@ -416,8 +457,9 @@ def recirc_logits(bundle: ModelBundle, input_ids: torch.Tensor, params: RecircPa
         # 两种层需要不同的掩码生成函数，按层类型分发。
         # 注意：层类型的属性名 4.x 叫 attention_type，5.x 叫 layer_type。
         def layer_attn_type(layer):
-            return getattr(layer, "attention_type", None) or \
-                getattr(layer, "layer_type", None)
+            return getattr(layer, "attention_type", None) or getattr(
+                layer, "layer_type", None
+            )
 
         has_sliding = any(
             layer_attn_type(l) == "sliding_attention" for l in model_emb.layers
@@ -427,6 +469,7 @@ def recirc_logits(bundle: ModelBundle, input_ids: torch.Tensor, params: RecircPa
                 create_causal_mask,
                 create_sliding_window_causal_mask,
             )
+
             # 这两个函数需要从"当时的 cache 状态"推断掩码尺寸，
             # 所以参数先留空，具体值在 make_masks 里填
             mask_kwargs = {
@@ -445,10 +488,11 @@ def recirc_logits(bundle: ModelBundle, input_ids: torch.Tensor, params: RecircPa
             # 4.x / 5.x 的掩码函数签名不同（5.x 用 inputs_embeds、无
             # cache_position、多了 layer_idx），按签名只传存在的参数。
             import inspect as _inspect
+
             _mask_params = _inspect.signature(create_causal_mask).parameters
             _mask_arg_names = set(_mask_params)
         else:
-            mask_fns = None   # 没有滑动窗口的模型不需要
+            mask_fns = None  # 没有滑动窗口的模型不需要
 
         def make_masks(step_x, step_cache_pos, step_pos_ids):
             """
@@ -463,7 +507,7 @@ def recirc_logits(bundle: ModelBundle, input_ids: torch.Tensor, params: RecircPa
             # 统一的候选参数（4.x 与 5.x 的公共子集）
             base_kw = {
                 "config": config,
-                "attention_mask": None,       # 无 padding，不需要额外掩码
+                "attention_mask": None,  # 无 padding，不需要额外掩码
                 # cache 非空时把 kv_cache 传进去，函数会据此算 kv_length
                 "past_key_values": step_cache_pos.numel() > 0 and kv_cache or None,
                 "position_ids": step_pos_ids,
@@ -482,12 +526,14 @@ def recirc_logits(bundle: ModelBundle, input_ids: torch.Tensor, params: RecircPa
         # ==============================================================
         # 主循环：逐个 token 顺序处理
         # ==============================================================
-        for t in range(seq):
+        for t in range(seq):  # t 是当前处理的 token 在序列中的索引
             # ---- 取出当前 token，准备位置信息 ----
             # input_ids[t:t+1] 形状 [1]（一维）；unsqueeze(0) 变成 [1, 1]（二维）
             # 因为 embed_tokens 要求输入是 [batch, seq]，一维会得到 [1, hidden]
             # 而不是 [1, 1, hidden]，导致后续层维度错误（踩过的坑！）
-            tok = input_ids[t:t + 1].unsqueeze(0).to(device)  # [1, 1]（embed 需要 2D）
+            tok = (
+                input_ids[t : t + 1].unsqueeze(0).to(device)
+            )  # [1, 1]（embed 需要 2D）
             # pos：当前 token 在序列中的绝对位置（用于 RoPE 和位置编码）
             pos = torch.tensor([kv_len], device=device)
             # cache_pos：当前 token 写入 cache 的位置编号（与 pos 相同）
@@ -498,10 +544,14 @@ def recirc_logits(bundle: ModelBundle, input_ids: torch.Tensor, params: RecircPa
             # 位置的那一行（形状 [1, 1, head_dim]）。RoPE 只与位置有关，
             # 与历史无关，所以可以直接从预计算表里切片。
             if rotary_global is not None:
-                pe_global = (rotary_global[0][:, kv_len:kv_len + 1],
-                             rotary_global[1][:, kv_len:kv_len + 1])
-                pe_local = (rotary_local[0][:, kv_len:kv_len + 1],
-                            rotary_local[1][:, kv_len:kv_len + 1])
+                pe_global = (
+                    rotary_global[0][:, kv_len : kv_len + 1],
+                    rotary_global[1][:, kv_len : kv_len + 1],
+                )
+                pe_local = (
+                    rotary_local[0][:, kv_len : kv_len + 1],
+                    rotary_local[1][:, kv_len : kv_len + 1],
+                )
             else:
                 pe_global = pe_local = None
 
@@ -514,18 +564,26 @@ def recirc_logits(bundle: ModelBundle, input_ids: torch.Tensor, params: RecircPa
             # 第一遍：正常前向（增量式，复用 KV cache），逐层记录残差
             # ------------------------------------------------------------
             kv_cache.overwrite_from = None  # 第一遍：追加模式
-            x = model.model.embed_tokens(tok)   # token id -> 嵌入向量 [1, 1, hidden]
-            first_pass_residuals[0] = x         # 记录 embedding 输出（第 0 层之前）
+            x = model.model.embed_tokens(tok)  # token id -> 嵌入向量 [1, 1, hidden]
+            first_pass_residuals[0] = x  # 记录 embedding 输出（第 0 层之前）
             for l in range(n_layers):
-                layer = model.model.layers[l]   # 第 l 个 transformer 块
+                layer = model.model.layers[l]  # 第 l 个 transformer 块
                 # 手动调用该层（不经过模型的整体 forward），以便拿到中间层输出
-                x = call_layer(layer, x, pe_global, pe_local,
-                               attn_mask[layer_attn_type(layer)] if attn_mask is not None else None,
-                               pos, cache_pos)
+                x = call_layer(
+                    layer,
+                    x,
+                    pe_global,
+                    pe_local,
+                    attn_mask[layer_attn_type(layer)]
+                    if attn_mask is not None
+                    else None,
+                    pos,
+                    cache_pos,
+                )
                 # 层的返回是元组 (hidden_states, ...)，取第一个元素
                 x = x[0] if isinstance(x, (tuple, list)) else x
-                first_pass_residuals[l + 1] = x   # 记录第 l 层的残差输出
-            last_hidden = x   # 第一遍的最终隐藏向量
+                first_pass_residuals[l + 1] = x  # 记录第 l 层的残差输出
+            last_hidden = x  # 第一遍的最终隐藏向量
 
             # 第一遍的 logits 仅作参考（baseline 用的不是它），这里注释掉
             # logits_1 = lm_head(last_hidden)
@@ -534,8 +592,8 @@ def recirc_logits(bundle: ModelBundle, input_ids: torch.Tensor, params: RecircPa
             # 第二遍：recirculation 混合 + 重算 dest..top 层
             # ------------------------------------------------------------
             # 取第一遍记录的深层/浅层残差
-            z_s = first_pass_residuals[params.source]   # 深层（source 层）
-            z_d = first_pass_residuals[params.dest]     # 浅层（dest 层）
+            z_s = first_pass_residuals[params.source]  # 深层（source 层）
+            z_d = first_pass_residuals[params.dest]  # 浅层（dest 层）
             # ramping：前 ramp 个 token 把 α 从 0 线性升到目标值
             alpha_t = params.alpha
             if params.ramp and t < params.ramp:
@@ -547,12 +605,20 @@ def recirc_logits(bundle: ModelBundle, input_ids: torch.Tensor, params: RecircPa
 
             # 从 dest 层开始重算（第二遍）
             kv_cache.overwrite_from = params.dest  # 第二遍：覆盖模式（d..top 层）
-            x = z_d_new                            # 第二遍的起点是混合后的向量
+            x = z_d_new  # 第二遍的起点是混合后的向量
             for l in range(params.dest, n_layers):
                 layer = model.model.layers[l]
-                x = call_layer(layer, x, pe_global, pe_local,
-                               attn_mask[layer_attn_type(layer)] if attn_mask is not None else None,
-                               pos, cache_pos)
+                x = call_layer(
+                    layer,
+                    x,
+                    pe_global,
+                    pe_local,
+                    attn_mask[layer_attn_type(layer)]
+                    if attn_mask is not None
+                    else None,
+                    pos,
+                    cache_pos,
+                )
                 x = x[0] if isinstance(x, (tuple, list)) else x
 
             # ---- 由第二遍的最终隐藏向量计算 logits ----
@@ -572,7 +638,7 @@ def recirc_logits(bundle: ModelBundle, input_ids: torch.Tensor, params: RecircPa
                 logits = logits * config.final_logit_softcapping
             all_logits.append(logits[0, 0])  # 去掉 batch/seq 两维，存 [vocab]
 
-            kv_len += 1   # 已处理 token 数 +1
+            kv_len += 1  # 已处理 token 数 +1
 
             # 【重要语义说明】为什么下一轮第一遍的 KV 是"对"的？
             #   本轮第二遍把 dest..top 层当前位置的 KV 覆盖成了
@@ -583,7 +649,9 @@ def recirc_logits(bundle: ModelBundle, input_ids: torch.Tensor, params: RecircPa
 
             # 进度打印（verbose 模式，每 128 个 token 一次）
             if verbose and (t + 1) % 128 == 0:
-                print(f"    [tok {t+1}/{seq}] kv={kv_len} elapsed={time.time()-t0:.1f}s")
+                print(
+                    f"    [tok {t + 1}/{seq}] kv={kv_len} elapsed={time.time() - t0:.1f}s"
+                )
 
     logits = torch.stack(all_logits)  # 把所有位置的 [vocab] 拼成 [seq, vocab]
     return logits
@@ -592,6 +660,7 @@ def recirc_logits(bundle: ModelBundle, input_ids: torch.Tensor, params: RecircPa
 # ===========================================================================
 # 第三部分：困惑度评估
 # ===========================================================================
+
 
 def perplexity_from_logits(logits: torch.Tensor, target_ids: torch.Tensor) -> float:
     """
@@ -602,16 +671,16 @@ def perplexity_from_logits(logits: torch.Tensor, target_ids: torch.Tensor) -> fl
       exp(平均负对数似然)。直觉理解：
         - ppl = 1   完美预测（每个词都猜中，概率 1）
         - ppl = N   平均来说模型在每个位置有 N 个"候选词"拿不准
-      所以困惑度越低越好。论文的 Gemma3 1B 在 PG-19 上 ppl ≈ 22。
+      所以困惑度**越低越好**。论文的 Gemma3 1B 在 PG-19 上 ppl ≈ 22。
 
     参数：
       logits    : 形状 [seq, vocab]，每个位置预测下一词的原始分数
       target_ids: 形状 [seq]，每个位置的"正确答案" token id
                   （注意：位置 t 的正确答案是 t+1 位置的 token）
     """
-    logits = logits.float()          # 统一转 float32（bf16 上算 log_softmax 更稳）
-    target = target_ids.long()       # 保证目标 id 是整数类型
-    log_probs = F.log_softmax(logits, dim=-1)   # 分数 -> 对数概率（按词表维归一化）
+    logits = logits.float()  # 统一转 float32（bf16 上算 log_softmax 更稳）
+    target = target_ids.long()  # 保证目标 id 是整数类型
+    log_probs = F.log_softmax(logits, dim=-1)  # 分数 -> 对数概率（按词表维归一化）
     # gather(1, ...)：取出每个位置"正确答案"对应的对数概率
     #   log_probs: [seq, vocab]，target.unsqueeze(1): [seq, 1]
     #   结果: [seq, 1]，squeeze(1) 后是 [seq]
@@ -620,7 +689,9 @@ def perplexity_from_logits(logits: torch.Tensor, target_ids: torch.Tensor) -> fl
     return math.exp(nll.mean().item())
 
 
-def eval_baseline_ppl(bundle: ModelBundle, input_ids: torch.Tensor, verbose: bool = False) -> float:
+def eval_baseline_ppl(
+    bundle: ModelBundle, input_ids: torch.Tensor, verbose: bool = False
+) -> float:
     """
     计算"标准并行 prefill"的 baseline 困惑度。
 
@@ -665,12 +736,12 @@ if __name__ == "__main__":
     # baseline（标准前向）
     t0 = time.time()
     ppl_b = eval_baseline_ppl(bundle, ids)
-    print(f"[baseline] ppl={ppl_b:.4f}  ({time.time()-t0:.2f}s)")
+    print(f"[baseline] ppl={ppl_b:.4f}  ({time.time() - t0:.2f}s)")
 
     # recirculation（顺序前向）
     params = RecircParams(source=args.source, dest=args.dest, alpha=args.alpha)
     t0 = time.time()
     logits = recirc_logits(bundle, ids, params, verbose=True)
     ppl_r = perplexity_from_logits(logits[:-1], ids[1:])
-    print(f"[recirc ] ppl={ppl_r:.4f}  ({time.time()-t0:.2f}s)")
-    print(f"[对比  ] 相对变化 {(ppl_r/ppl_b - 1)*100:+.2f}%")
+    print(f"[recirc ] ppl={ppl_r:.4f}  ({time.time() - t0:.2f}s)")
+    print(f"[对比  ] 相对变化 {(ppl_r / ppl_b - 1) * 100:+.2f}%")
