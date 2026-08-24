@@ -3,8 +3,9 @@
 GPU / CUDA 环境自检脚本（Recirculation 复现前置检查）
 用法:  python3 check_gpu.py
 """
-import sys
+
 import platform
+import sys
 
 print("=" * 60)
 print("GPU / CUDA 环境自检")
@@ -18,6 +19,7 @@ print(f"  系统        : {platform.system()} {platform.release()}")
 # 2. PyTorch 与 CUDA 编译版本
 try:
     import torch
+
     print("\n[2] PyTorch 信息")
     print(f"  torch 版本          : {torch.__version__}")
     print(f"  torch 编译 CUDA 版本 : {torch.version.cuda}")
@@ -37,7 +39,7 @@ except Exception as e:
     print(f"  NVML 原始枚举失败: {type(e).__name__}: {e}")
 
 try:
-    raw_count2 = torch.cuda._raw_device_count()
+    raw_count2 = torch.cuda.device_count()
     print(f"  CUDA 原始设备数: {raw_count2}")
 except Exception as e:
     print(f"  CUDA 原始枚举失败: {type(e).__name__}: {e}")
@@ -65,9 +67,13 @@ if torch.cuda.is_available():
         a = torch.randn(1024, 1024, device=dev)
         b = torch.matmul(a, a)
         torch.cuda.synchronize()
-        print(f"  矩阵乘法测试通过: {a.shape} -> {b.shape} (示例值 {b[0, 0].item():.4f})")
-        print(f"  当前显存占用: {torch.cuda.memory_allocated() / 1024**2:.1f} MB / "
-              f"{torch.cuda.get_device_properties(0).total_memory / 1024**3:.2f} GB")
+        print(
+            f"  矩阵乘法测试通过: {a.shape} -> {b.shape} (示例值 {b[0, 0].item():.4f})"
+        )
+        print(
+            f"  当前显存占用: {torch.cuda.memory_allocated() / 1024**2:.1f} MB / "
+            f"{torch.cuda.get_device_properties(0).total_memory / 1024**3:.2f} GB"
+        )
         print("\n结论: CUDA 完全可用，可以直接跑 GPU 训练/推理。")
     except Exception as e:
         print(f"  计算测试失败: {type(e).__name__}: {e}")
@@ -75,7 +81,9 @@ if torch.cuda.is_available():
 else:
     print("\n[4] 实际计算测试: 跳过（无 CUDA 设备）")
     print("\n结论: PyTorch 无法使用 GPU。可能原因:")
-    print("  1. WSL2 会话启动时 GPU 未透传 → 在 Windows 执行 'wsl --shutdown' 后重开 WSL")
+    print(
+        "  1. WSL2 会话启动时 GPU 未透传 → 在 Windows 执行 'wsl --shutdown' 后重开 WSL"
+    )
     print("  2. NVIDIA 驱动不支持 WSL → 重装最新驱动（支持 WSL 的版本）")
     print("  3. 当前是 WSL1 → 需迁移到 WSL2")
     print("  4. 无 NVIDIA GPU 或 GPU 被禁用")
@@ -84,16 +92,19 @@ else:
 print("\n[5] 附加环境信息")
 try:
     import transformers
+
     print(f"  transformers 版本: {transformers.__version__}")
 except ImportError:
     print("  transformers 未安装")
 try:
     import datasets
+
     print(f"  datasets 版本: {datasets.__version__}")
 except ImportError:
     print("  datasets 未安装")
 try:
     import accelerate
+
     print(f"  accelerate 版本: {accelerate.__version__}")
 except ImportError:
     print("  accelerate 未安装")
