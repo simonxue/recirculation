@@ -26,3 +26,5 @@ venv/
 .idea/
 .vscode/
 *.swp
+cscope*
+tags
