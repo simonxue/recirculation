@@ -28,3 +28,4 @@ venv/
 *.swp
 cscope*
 tags
+filelist_vert.lst
