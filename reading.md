@@ -145,9 +145,7 @@ baseline ppl = **27.30**（多位置窗口含文档中后部更难位置，基�
 ## 6. 文件清单
 
 - `recirculation.py`：核心实现（教学式注释）
-- `eval_ppl.py`：困惑度评估（内置文本 / pg19 / arxiv / c4）
-- `eval_real.py`：PG-19 文档扫描（多 α × 层对）
-- `eval_strict.py`：严肃验证（多文档 × 多位置窗口 + 逐位置诊断）
+- `eval.py`：统一评估入口（内置文本 / pg19 / arxiv / c4；随机窗口或 多文档×多位置窗口；多 α × 层对扫描；逐位置诊断）
 - `run_gpu.sh` / `check_gpu.py`：GPU 一键脚本 / 环境自检
 - `results_*.json`：各实验原始结果
 - git 历史：`9dc0897`（初始）→ `f27825d`（注释润色）→ `9f994bb`（设备修复）→ 结果记录

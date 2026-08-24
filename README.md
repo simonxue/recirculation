@@ -128,18 +128,19 @@ bash run_gpu.sh
 bash run_gpu.sh --full
 
 # [4] 严肃验证：PG-19 多文档 × 多位置窗口 × 多配置 + 逐位置诊断
-python3 eval_strict.py --n_docs 6 --positions 3 \
-    --alphas 0.04 0.07 0.10 --layer_pairs 11-4 10-4 12-5 \
+python3 eval.py --datasets pg19 --n_docs 6 --positions 3 \
+    --alphas 0.04 0.07 0.10 --layer_pairs 11-4 10-4 12-5 --diagnose \
     --out results_strict.json
 
-# [5] PG-19 文档开头扫描（轻量）
-python3 eval_real.py --n_docs 2 --alphas 0.07 0.10 --layer_pairs 11-4 10-4 12-5
+# [5] PG-19 文档开头扫描（轻量；--n_docs 传 1 时每文档只取开头窗口）
+python3 eval.py --datasets pg19 --n_docs 2 --positions 1 \
+    --alphas 0.07 0.10 --layer_pairs 11-4 10-4 12-5
 
 # [6] 多数据集困惑度对比（builtin 免下载；pg19/arxiv/c4 需联网）
-python3 eval_ppl.py --datasets builtin --n_windows 10 --window 512
+python3 eval.py --datasets builtin --n_windows 10 --window 512
 ```
 
-> ⚠️ 数据获取注意：新版 `datasets`（5.x）不再支持 `deepmind/pg19` 等旧式脚本数据集，本项目统一使用 parquet 镜像仓库 `emozilla/pg19`（streaming 读取，无需全量下载）。`eval_ppl.py` 的 `pg19` 条目因此仅作参考，真实长文评估请用 `eval_real.py` / `eval_strict.py`。
+> ⚠️ 数据获取注意：新版 `datasets`（5.x）不再支持 `deepmind/pg19` 等旧式脚本数据集，本项目统一使用 parquet 镜像仓库 `emozilla/pg19`（streaming 读取，无需全量下载）。真实长文评估请用 `--datasets pg19` 配合 `--n_docs`。
 
 结果 JSON 均包含 `env` 字段（Python/torch/transformers 版本、GPU 名），便于对照复现。
 
@@ -150,9 +151,7 @@ python3 eval_ppl.py --datasets builtin --n_windows 10 --window 512
 | 文件 | 说明 |
 |---|---|
 | `recirculation.py` | **核心实现**：模型加载、顺序 prefill、两遍前向、`OverwriteCache`、困惑度评估（教学式注释） |
-| `eval_ppl.py` | 多数据集困惑度评估（builtin / pg19 / arxiv / c4） |
-| `eval_real.py` | PG-19 文档开头扫描（多 α × 层对） |
-| `eval_strict.py` | 严肃验证（多文档 × 多位置窗口 + 逐位置诊断） |
+| `eval.py` | 统一评估入口：多数据集（builtin/pg19/arxiv/c4）× 窗口采样（随机位置 / 多文档多位置）× α 与层对扫描 × 逐位置诊断 |
 | `run_gpu.sh` / `check_gpu.py` | GPU 一键脚本 / 环境自检 |
 | `smoke_test.py` | 无 GPU 冒烟自检（CI 用） |
 | `results_real.json` / `results_strict_step1.json` | 核心实验原始结果（实验 A / 实验 B，含环境指纹） |

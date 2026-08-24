@@ -76,10 +76,9 @@
 
 ## 6. 交付物
 
-- `recirculation_forward.py`：顺序 prefill + recirculation 前向（可复用于所有实验）
-- `eval_ppl.py`：数据集窗口化 + baseline/recirc 困惑度对比
-- `sweep.py`：α 与 (源,目标) 小网格扫描，输出热力图
-- 结果表 + 与论文 Table 1 的对照
+- `recirculation.py`：顺序 prefill + recirculation 前向 + 困惑度评估（可复用于所有实验）
+- `eval.py`：统一评估入口——数据集窗口化（builtin/pg19/arxiv/c4；多文档×多位置窗口）与 α × (源,目标) 小网格扫描 + baseline/recirc 困惑度对比 + 逐位置诊断（即原计划 `sweep.py` 的落点；结果以 JSON 输出，未生成热力图）
+- 结果表 + 与论文 Table 1 的对照（见下文「复现报告」与 `reading.md` §4）
 
 **一句话**：用免费 Colab T4 跑 Gemma3 1B，先以 baseline 困惑度校准实现，再做 PG-19/arXiv 上 baseline vs recirculation 对比（期望 −8%~−15%），总计算量约 5–10 GPU 小时、成本 $0。
 
@@ -114,6 +113,6 @@
 
 ### 最终文件清单
 
-- `recirculation.py`（核心，教学注释）/ `eval_ppl.py` / `eval_real.py` / `eval_strict.py`（严肃验证）
+- `recirculation.py`（核心，教学注释）/ `eval.py`（统一评估入口）
 - `run_gpu.sh` / `check_gpu.py` / `results_*.json`（实验原始数据）
-- git 提交：`9dc0897` 初始 → `f27825d` 注释润色 → `9f994bb` 设备修复 → 结果与文档记录
+- git 提交：`9dc0897` 初始 → `f27825d` 注释润色 → `9f994bb` 设备修复 → 结果与文档记录 → 后续开源准备（README/License/CI/清理）至 `0983413`

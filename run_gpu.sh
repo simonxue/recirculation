@@ -66,11 +66,11 @@ MODE="${1:---quick}"
 if [ "$MODE" = "--full" ]; then
     echo ""
     echo "========== [3] 完整实验：1024 窗口 × α∈{0.07,0.10,0.15} × {src=11,dst=4} =========="
-    python3 eval_ppl.py --datasets builtin --n_windows 5 --window 1024 \
+    python3 eval.py --datasets builtin --n_windows 5 --window 1024 \
         --source 11 --dest 4 --alpha 0.07 --out results_a007.json
-    python3 eval_ppl.py --datasets builtin --n_windows 5 --window 1024 \
+    python3 eval.py --datasets builtin --n_windows 5 --window 1024 \
         --source 11 --dest 4 --alpha 0.10 --out results_a010.json
-    python3 eval_ppl.py --datasets builtin --n_windows 5 --window 1024 \
+    python3 eval.py --datasets builtin --n_windows 5 --window 1024 \
         --source 11 --dest 4 --alpha 0.15 --out results_a015.json
 
     echo ""
@@ -79,7 +79,7 @@ if [ "$MODE" = "--full" ]; then
 import torch, time
 from recirculation import load_model, recirc_logits, RecircParams, eval_baseline_ppl
 import torch.nn.functional as F
-from eval_ppl import BUILTIN_TEXT
+from eval import BUILTIN_TEXT
 
 bundle = load_model("google/gemma-3-1b-pt")
 text = BUILTIN_TEXT * 4
