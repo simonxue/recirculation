@@ -35,6 +35,7 @@
 import argparse   # 命令行参数
 import json       # 结果存成 JSON 文件
 import math       # math.log / math.exp（累加困惑度用）
+import os         # 追加模式下检查结果库文件是否存在
 import random     # 窗口位置采样
 import time       # 计时
 
@@ -234,6 +235,9 @@ def main():
     ap.add_argument("--no-baseline", action="store_true",
                     help="只跑 recirc（省一半时间）")
     ap.add_argument("--out", default=None, help="结果 JSON 输出路径")
+    ap.add_argument("--append", action="store_true",
+                    help="追加模式：把本次运行写入 --out 指定的结果库 JSON"
+                         "（文件不存在则新建），每条结果带时间戳，不覆盖旧结果")
     args = ap.parse_args()
 
     # ---------- 确定配置列表：单配置快捷参数 或 网格扫描 ----------
@@ -347,9 +351,29 @@ def main():
 
     # ---------- 保存结果 ----------
     if args.out:
-        with open(args.out, "w") as f:
-            json.dump(results, f, indent=2, ensure_ascii=False)
-        print(f"\n结果已保存: {args.out}")
+        # 本次运行的完整记录（含时间戳；追加模式下每条记录可区分）
+        run_record = {"time": time.strftime("%Y-%m-%d %H:%M:%S"),
+                      "results": results}
+        if args.append:
+            # 追加模式：读入旧结果库（不存在则从空库开始），把本次记录
+            # 追加进 runs 列表，保留历史结果不被覆盖。
+            if os.path.exists(args.out):
+                with open(args.out, "r") as f:
+                    library = json.load(f)
+                if not isinstance(library, dict) or "runs" not in library:
+                    # 旧格式（单次实验的扁平 JSON）：包一层统一为结果库
+                    library = {"runs": [library]}
+            else:
+                library = {"runs": []}
+            library["runs"].append(run_record)
+            with open(args.out, "w") as f:
+                json.dump(library, f, indent=2, ensure_ascii=False)
+            print(f"\n结果已追加到结果库: {args.out}"
+                  f"（共 {len(library['runs'])} 次运行）")
+        else:
+            with open(args.out, "w") as f:
+                json.dump(run_record, f, indent=2, ensure_ascii=False)
+            print(f"\n结果已保存: {args.out}")
 
 
 if __name__ == "__main__":

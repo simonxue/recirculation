@@ -147,7 +147,7 @@ baseline ppl = **27.30**（多位置窗口含文档中后部更难位置，基�
 - `recirculation.py`：核心实现（教学式注释）
 - `eval.py`：统一评估入口（内置文本 / pg19 / arxiv / c4；随机窗口或 多文档×多位置窗口；多 α × 层对扫描；逐位置诊断）
 - `run_gpu.sh` / `check_gpu.py`：GPU 一键脚本 / 环境自检
-- `results_*.json`：各实验原始结果
+- `results.json`：实验结果库（实验 A/B/C 原始数据，含环境指纹；`eval.py --append` 追加）
 - git 历史：`9dc0897`（初始）→ `f27825d`（注释润色）→ `9f994bb`（设备修复）→ 结果记录
 
 

@@ -62,7 +62,7 @@ f(z_s) = z_s · ||z_d||₂ / ||z_s||₂  （公式 2：源向量缩放到目标�
 | α=0.04, 10-4 | −3.33% | 14/18 (78%) |
 | α=0.04, 11-4 | −3.28% | 16/18 (89%) |
 
-- 评估设置：PG-19 6 个文档 × 每文档 3 个位置窗口 = 18 窗口 × 1024 token（`results_strict_step1.json`）
+- 评估设置：PG-19 6 个文档 × 每文档 3 个位置窗口 = 18 窗口 × 1024 token（结果库 `results.json`，实验 B）
 - baseline 困惑度 = 27.30（多位置窗口含文档中后部更难位置）；文档开头窗口 baseline = 19.13（≈ 论文 arXiv 19.10，实现校准良好）
 - 正确性校验：α=0 时 recirculation 与标准前向一致（相对差 0.0028%，纯浮点噪声）
 
@@ -117,10 +117,11 @@ bash run_gpu.sh
 # [3] 完整实验：PG-19 多文档 × 多位置窗口 × 多配置 + 逐位置诊断（GPU，较慢）
 python3 eval.py --datasets pg19 --n_docs 6 --positions 3 \
     --alphas 0.04 0.07 0.10 --layer_pairs 11-4 10-4 12-5 --diagnose \
-    --out results_strict.json
+    --out results.json --append
 ```
 
 > 💡 `eval.py` 还支持：多数据集对比（`--datasets builtin / arxiv / c4`）、文档开头扫描（`--n_docs 2 --positions 1`）、单配置快速评估（`--source 11 --dest 4 --alpha 0.07`）。PG-19 经 `emozilla/pg19` parquet 镜像流式读取（新版 `datasets` 不再支持官方脚本数据集）。
+> 结果统一写入 `results.json` 结果库：加 `--append` 追加（每次运行一条带时间戳的记录，不覆盖历史），不加则覆盖为单次运行记录。
 
 结果 JSON 均包含 `env` 字段（Python/torch/transformers 版本、GPU 名），便于对照复现。
 
@@ -134,7 +135,7 @@ python3 eval.py --datasets pg19 --n_docs 6 --positions 3 \
 | `eval.py` | 统一评估入口：多数据集（builtin/pg19/arxiv/c4）× 窗口采样（随机位置 / 多文档多位置）× α 与层对扫描 × 逐位置诊断 |
 | `run_gpu.sh` / `check_gpu.py` | GPU 一键脚本 / 环境自检 |
 | `smoke_test.py` | 无 GPU 冒烟自检（CI 用） |
-| `results_real.json` / `results_strict_step1.json` | 核心实验原始结果（含环境指纹） |
+| `results.json` | 实验结果库：A/B/C 三次实验的原始数据（含环境指纹；`eval.py --append` 可继续追加） |
 | `reading.md` | 论文理解 + 完整复现报告（环境/实现/数据/对照/结论） |
 | `repro_plan.md` | 复现计划及其演变（计划 vs 实际、方案转变） |
 

@@ -2,7 +2,7 @@
 
 > **状态：✅ 已完成（2026-08-21 晚至 08-22 凌晨）**——本机 WSL2 + RTX 2000 Ada 上成功复现核心主张（PG-19 上 recirc 一致降困惑度，最优 −7.93%）。
 > 本文档同时记录**当初的计划**与**实际执行的差异**（下文每节附「实际 vs 计划」），重点说明从"免费云端 T4"到"本地 GPU"的方案转变。
-> 完整复现报告见 [`reading.md`](reading.md)；实验数据见 `results_real.json` / `results_strict_step1.json`。
+> 完整复现报告见 [`reading.md`](reading.md)；实验数据见结果库 `results.json`（实验 A/B/C）。
 
 ## 0. 原始计划（2026-08-21 制定）
 
@@ -118,7 +118,7 @@
 - `eval.py`：统一评估入口——多数据集（builtin/pg19/arxiv/c4）、多文档×多位置窗口、α × (源,目标) 网格扫描、逐位置诊断（对照论文图 9）；结果以 JSON 输出（未生成热力图，原计划 `sweep.py` 的落点）
 - `run_gpu.sh` / `check_gpu.py`：GPU 一键脚本（快速验证 + --full 完整实验）/ 环境自检
 - `smoke_test.py`：无 GPU 冒烟自检（CI 用）；`.github/workflows/ci.yml`：GitHub Actions CI
-- `results_real.json` / `results_strict_step1.json`：实验 A / B 原始数据（含环境指纹）
+- `results.json`：实验结果库（实验 A/B/C 原始数据，含环境指纹；`eval.py --append` 继续追加）
 - 结果表 + 与论文 Table 1 的对照（`reading.md` §4 + README）
 - git 历史：`9dc0897` 初始 → `f27825d` 注释润色 → `9f994bb` 设备修复 → `b347d0d` 实验 B 成功 → `81078fd` 报告 → 开源准备（`a165ff1` 起）→ `a65e1e8` eval 脚本合并
 
